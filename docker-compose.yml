@@ -3,16 +3,53 @@ version: "3.9"
 services:
   mongodb:
     image: mongo:7.0
-    container_name: liquidity-guard-mongo
+    container_name: lgb-mongo
     restart: unless-stopped
     ports:
       - "27017:27017"
     environment:
-      # No auth for dev — bind to localhost only via ports mapping
       MONGO_INITDB_DATABASE: liquidity_guard
     volumes:
       - mongo_data:/data/db
     command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.5"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: bot
+    container_name: lgb-bot
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_URI:    mongodb://mongodb:27017
+      MONGO_DB:     liquidity_guard
+      GRPC_ADDR:    :50051
+      METRICS_ADDR: :9090
+    ports:
+      - "50051:50051"
+      - "9090:9090"
+
+  watchdog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: watchdog
+    container_name: lgb-watchdog
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongodb:27017
+      MONGO_DB:  liquidity_guard
 
 volumes:
   mongo_data:
