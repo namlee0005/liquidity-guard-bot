@@ -1,8 +1,8 @@
 package worker
 
 import (
-	"github.com/namlee0005/liquidity-guard-bot/internal/engine"
-	"github.com/namlee0005/liquidity-guard-bot/internal/models"
+	"liquidity-guard-bot/internal/engine"
+	"liquidity-guard-bot/internal/models"
 )
 
 // SpreadBoundsFromModel converts the models.SpreadConfig (MongoDB document type)

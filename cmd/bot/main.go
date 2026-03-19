@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	mongoClient "github.com/namlee0005/liquidity-guard-bot/pkg/db/mongo"
-	maserrors "github.com/namlee0005/liquidity-guard-bot/pkg/errors"
+	mongoClient "liquidity-guard-bot/pkg/db/mongo"
+	maserrors "liquidity-guard-bot/pkg/errors"
 )
 
 func main() {

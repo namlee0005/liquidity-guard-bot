@@ -12,7 +12,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/namlee0005/liquidity-guard-bot/pkg/exchange"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
 const exchangeName = "MOCK"

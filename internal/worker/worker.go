@@ -10,9 +10,9 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/namlee0005/liquidity-guard-bot/internal/engine"
-	"github.com/namlee0005/liquidity-guard-bot/internal/models"
-	"github.com/namlee0005/liquidity-guard-bot/pkg/exchange"
+	"liquidity-guard-bot/internal/engine"
+	"liquidity-guard-bot/internal/models"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
 // Signal is an out-of-band command sent from the Orchestrator to a running Worker.

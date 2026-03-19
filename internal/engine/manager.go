@@ -8,7 +8,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/namlee0005/liquidity-guard-bot/pkg/exchange"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
 // ManagedOrder tracks a live order placed by the OrderManager.

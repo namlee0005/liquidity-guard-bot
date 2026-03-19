@@ -12,8 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
-	mongoClient "github.com/namlee0005/liquidity-guard-bot/pkg/db/mongo"
-	"github.com/namlee0005/liquidity-guard-bot/internal/models"
+	mongoClient "liquidity-guard-bot/pkg/db/mongo"
+	"liquidity-guard-bot/internal/models"
 )
 
 // Period labels.

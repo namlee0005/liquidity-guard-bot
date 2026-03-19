@@ -15,7 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 
-	maserrors "github.com/namlee0005/liquidity-guard-bot/pkg/errors"
+	maserrors "liquidity-guard-bot/pkg/errors"
 	"github.com/shopspring/decimal"
 )
 

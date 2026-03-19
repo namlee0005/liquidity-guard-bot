@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/namlee0005/liquidity-guard-bot/internal/models"
-	"github.com/namlee0005/liquidity-guard-bot/internal/worker"
-	"github.com/namlee0005/liquidity-guard-bot/pkg/exchange"
+	"liquidity-guard-bot/internal/models"
+	"liquidity-guard-bot/internal/worker"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
 // AdapterFactory constructs an ExchangeAdapter from a BotConfig.

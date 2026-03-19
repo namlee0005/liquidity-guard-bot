@@ -13,11 +13,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	mongoClient "github.com/namlee0005/liquidity-guard-bot/pkg/db/mongo"
-	"github.com/namlee0005/liquidity-guard-bot/internal/models"
-	"github.com/namlee0005/liquidity-guard-bot/internal/orchestrator"
-	"github.com/namlee0005/liquidity-guard-bot/internal/telemetry"
-	botpb "github.com/namlee0005/liquidity-guard-bot/proto/gen"
+	mongoClient "liquidity-guard-bot/pkg/db/mongo"
+	"liquidity-guard-bot/internal/models"
+	"liquidity-guard-bot/internal/orchestrator"
+	"liquidity-guard-bot/internal/telemetry"
+	botpb "liquidity-guard-bot/proto/gen"
 
 	"github.com/shopspring/decimal"
 	"go.mongodb.org/mongo-driver/bson"

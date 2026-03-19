@@ -1,4 +1,4 @@
-module github.com/namlee0005/liquidity-guard-bot
+module liquidity-guard-bot
 
 go 1.22
 

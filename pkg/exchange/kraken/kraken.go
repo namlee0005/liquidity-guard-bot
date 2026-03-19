@@ -7,7 +7,7 @@ package kraken
 import (
 	"context"
 
-	"github.com/namlee0005/liquidity-guard-bot/pkg/exchange"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
 const exchangeName = "KRAKEN"

@@ -5,7 +5,7 @@ package telemetry
 import (
 	"sync"
 
-	"github.com/namlee0005/liquidity-guard-bot/internal/worker"
+	"liquidity-guard-bot/internal/worker"
 )
 
 // Subscriber is a channel that receives Telemetry events for one gRPC stream.
