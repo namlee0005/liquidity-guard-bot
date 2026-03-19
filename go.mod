@@ -3,6 +3,7 @@ module liquidity-guard-bot
 go 1.22
 
 require (
+	github.com/gorilla/websocket        v1.5.3
 	github.com/prometheus/client_golang v1.19.1
 	github.com/shopspring/decimal       v1.4.0
 	go.mongodb.org/mongo-driver        v1.15.0
