@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: liquidity-guard-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      # No auth for dev — bind to localhost only via ports mapping
+      MONGO_INITDB_DATABASE: liquidity_guard
+    volumes:
+      - mongo_data:/data/db
+    command: ["mongod", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.5"]
+
+volumes:
+  mongo_data:
