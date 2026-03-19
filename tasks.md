@@ -39,6 +39,8 @@
 - [x] **T7.1** Implement gRPC Server: Lifecycle RPCs (Create/Pause/Update/Delete)
 - [x] **T7.2** Implement `TelemetryHub`: WebSocket/gRPC stream for order book & balance
 - [x] **T7.3** Implement `AuditLogger` repository (MongoDB with WriteConcern: Majority)
+- [x] **T7.4** Implement Repository Layer: Interfaces and MongoDB implementations for all collections.
+- [x] **T7.5** Unit Tests: 14 tests for Repository layer and 22 tests for gRPC server.
 
 ## Phase 8 — Reporting & Monitoring
 - [x] **T8.1** Implement `Reporter` service: Daily/Weekly/Monthly aggregations from MongoDB
