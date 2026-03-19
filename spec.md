@@ -4,7 +4,7 @@
 
 The Liquidity Guard Bot is a specialized automated market maker designed to maintain liquidity and prevent delisting for low-volume crypto assets. It continuously places and manages layered bid/ask orders to enforce minimum market depth, operates within configurable spread bounds (0.3%–1%), and enforces hard risk controls against inventory drawdown (max 5–10% NAV per 24h). The system targets ≥95% uptime with autonomous SLOW/PAUSE throttle logic and automated daily, weekly, and monthly reporting.
 
-## Recommended Tech Stack
+## Recommended Tech Stack (ORIGINAL — DEPRECATED)
 
 | Layer | Technology | Rationale |
 |---|---|---|
@@ -20,7 +20,7 @@ The Liquidity Guard Bot is a specialized automated market maker designed to main
 
 > **Hard rule:** `Float` is strictly prohibited for all monetary and quantity fields. Use Python `Decimal` and PostgreSQL `NUMERIC(28,10)` throughout.
 
-## Architecture Overview
+## Architecture Overview (ORIGINAL — DEPRECATED)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -50,7 +50,7 @@ The Liquidity Guard Bot is a specialized automated market maker designed to main
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Key Components
+### Key Components (ORIGINAL — DEPRECATED)
 
 - **Price Oracle:** Async WebSocket consumer (CCXT Pro). Raises `StalePriceError` if no update in >5s; falls back to REST. Feeds mid-price and order book snapshot into Redis.
 - **Order Engine:** `SpreadCalculator` generates a layered bid/ask grid (20–50 orders per side) within configured spread (0.3%–1%). Skews quotes toward rebalancing when inventory is unbalanced (LONG → lower ask; SHORT → lower bid). `OrderManager` diffs against live orders, cancels stale (price drift >0.1%), and places new orders each cycle (default 10s).
@@ -59,3 +59,21 @@ The Liquidity Guard Bot is a specialized automated market maker designed to main
 - **Risk Engine + Controller:** Monitors 24h NAV drawdown. State machine: `NORMAL → SLOW (≥5% drawdown) → PAUSE (≥10% drawdown) → RESUME (after 30-min recovery)`. PAUSE triggers `emergency_cancel_all()`. State persisted in Redis for crash recovery.
 - **Reporter:** APScheduler jobs query PostgreSQL for P&L, uptime %, depth compliance %, and risk events. Outputs sanitized JSON reports to `reports/`; optional email delivery.
 - **Prometheus Exporter:** `/metrics` on port 9090 (configurable); `/health` endpoint. Grafana dashboard covers spread, drawdown, skew, order counts, and uptime.
+
+---
+
+## REVISION 1 — 2026-03-19 (Architecture & Stack Pivot)
+
+### New Technical Constraints
+- **Language:** **Go (Golang)** — Mandatory for high-concurrency exchange handling via Goroutines.
+- **Database:** **MongoDB** — For flexible, document-based configuration and bot lifecycle state management.
+- **Multi-Exchange Support:** Initial scope: MEXC, Bybit, Gate.io, Kraken.
+- **Control Plane:** Must support an external 3rd-party management interface (Create/Pause/Delete bots, Live Config Update).
+- **Telemetry:** Real-time WebSocket streaming of per-pair order books and account balances to the control plane.
+
+### Updated Component Requirements
+- **Exchange Workers:** Lightweight Go processes/goroutines per pair/exchange. Must implement a unified interface for different exchange WebSocket/REST patterns.
+- **Management API:** REST or gRPC interface for bot orchestration.
+- **State Store:** MongoDB collections for `BotConfigs`, `ActiveSessions`, `AuditLogs`, and `TradeHistory`.
+- **Concurrency Model:** Utilize Go's `channels` and `select` for non-blocking market data processing.
+- **Risk Watchdog:** Still required as an independent enforcement mechanism (can be a separate Go service).
