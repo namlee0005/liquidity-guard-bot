@@ -65,21 +65,13 @@ func (m *OrderManager) Reconcile(ctx context.Context, quotes []LayerQuote) error
 	m.mu.Unlock()
 
 	for _, q := range quotes {
-		for _, side := range []exchange.OrderSide{exchange.SideBid, exchange.SideAsk} {
+		for _, side := range []exchange.OrderSide{exchange.SideBuy, exchange.SideSell} {
 			price := q.BidPrice
-			if side == exchange.SideAsk {
+			if side == exchange.SideSell {
 				price = q.AskPrice
 			}
 
-			clientOID := m.seqGen()
-			result, err := m.adapter.PlaceOrder(ctx, exchange.PlaceOrderRequest{
-				ClientOID:   clientOID,
-				TradingPair: m.pair,
-				Side:        side,
-				Type:        exchange.OrderTypeLimit,
-				Price:       price,
-				Quantity:    q.Size,
-			})
+			result, err := m.adapter.PlaceLimitOrder(ctx, m.pair, side, price, q.Size)
 			if err != nil {
 				return fmt.Errorf("OrderManager.Reconcile place layer %d %s: %w", q.Layer, side, err)
 			}
@@ -87,7 +79,7 @@ func (m *OrderManager) Reconcile(ctx context.Context, quotes []LayerQuote) error
 			m.mu.Lock()
 			m.openOrders[result.ExchangeOrderID] = &ManagedOrder{
 				ExchangeOrderID: result.ExchangeOrderID,
-				ClientOID:       clientOID,
+				ClientOID:       m.seqGen(),
 				Layer:           q.Layer,
 				Side:            side,
 				Price:           price,

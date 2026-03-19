@@ -1,12 +1,10 @@
 // Package orchestrator manages the lifecycle of all BotWorkers.
-// It owns the Bot Registry, starts/stops goroutines, and routes gRPC signals.
+// It owns the Bot Registry and routes state transitions (Pause/Resume/Stop).
 package orchestrator
 
 import (
-	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"liquidity-guard-bot/internal/models"
 	"liquidity-guard-bot/internal/worker"
@@ -17,18 +15,14 @@ import (
 // Injected so the Orchestrator doesn't import concrete exchange packages.
 type AdapterFactory func(cfg models.BotConfig) (exchange.ExchangeAdapter, error)
 
-// SeqGen generates unique ClientOID strings.
-type SeqGen func() string
-
-// entry holds a running Worker and its cancel function.
+// entry holds a running Worker and its associated adapter.
 type entry struct {
-	worker *worker.Worker
-	cancel context.CancelFunc
-	doneCh <-chan struct{} // closed when the goroutine exits
+	w       *worker.Worker
+	adapter exchange.ExchangeAdapter
 }
 
-// Orchestrator is the Bot Registry: a sharded map of botID → running Worker.
-// Sharding (16 buckets) reduces lock contention when many bots update concurrently.
+// Orchestrator is the Bot Registry: a sharded map of botID → Worker.
+// Sharding (16 buckets) reduces lock contention under concurrent gRPC calls.
 const shards = 16
 
 type shard struct {
@@ -36,21 +30,15 @@ type shard struct {
 	workers map[string]*entry
 }
 
-// Orchestrator manages the full set of active BotWorkers.
+// Orchestrator manages the full set of active bot workers.
 type Orchestrator struct {
-	shards      [shards]shard
-	factory     AdapterFactory
-	seqGen      SeqGen
-	telemetryCh chan<- worker.Telemetry
+	shards  [shards]shard
+	factory AdapterFactory
 }
 
 // New creates a ready-to-use Orchestrator.
-func New(factory AdapterFactory, seqGen SeqGen, telemetryCh chan<- worker.Telemetry) *Orchestrator {
-	o := &Orchestrator{
-		factory:     factory,
-		seqGen:      seqGen,
-		telemetryCh: telemetryCh,
-	}
+func New(factory AdapterFactory) *Orchestrator {
+	o := &Orchestrator{factory: factory}
 	for i := range o.shards {
 		o.shards[i].workers = make(map[string]*entry)
 	}
@@ -58,7 +46,6 @@ func New(factory AdapterFactory, seqGen SeqGen, telemetryCh chan<- worker.Teleme
 }
 
 func (o *Orchestrator) bucket(botID string) *shard {
-	// FNV-1a hash for even distribution without importing a crypto package.
 	h := uint32(2166136261)
 	for i := 0; i < len(botID); i++ {
 		h ^= uint32(botID[i])
@@ -67,9 +54,9 @@ func (o *Orchestrator) bucket(botID string) *shard {
 	return &o.shards[h%shards]
 }
 
-// StartBot creates and registers a new Worker goroutine for the given config.
-// Returns ErrAlreadyExists if a worker for botID is already running.
-func (o *Orchestrator) StartBot(parentCtx context.Context, cfg models.BotConfig) error {
+// StartBot registers a new worker for the given config.
+// Returns an error if a worker for botID is already registered.
+func (o *Orchestrator) StartBot(cfg models.BotConfig) error {
 	b := o.bucket(cfg.BotID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -83,95 +70,70 @@ func (o *Orchestrator) StartBot(parentCtx context.Context, cfg models.BotConfig)
 		return fmt.Errorf("orchestrator: adapter for %s: %w", cfg.BotID, err)
 	}
 
-	wCfg := worker.Config{
-		BotID:        cfg.BotID,
-		TradingPair:  cfg.TradingPair,
-		OrderLayers:  cfg.OrderLayers,
-		LayerSize:    cfg.LayerSizeBase,
-		TickInterval: time.Second,
-		Bounds: worker.SpreadBoundsFromModel(cfg.Spread),
+	b.workers[cfg.BotID] = &entry{
+		w:       worker.NewWorker(cfg.BotID),
+		adapter: adapter,
 	}
-
-	w, err := worker.New(wCfg, adapter, o.telemetryCh, o.seqGen)
-	if err != nil {
-		return fmt.Errorf("orchestrator: worker init for %s: %w", cfg.BotID, err)
-	}
-
-	ctx, cancel := context.WithCancel(parentCtx)
-	doneCh := make(chan struct{})
-
-	go func() {
-		defer close(doneCh)
-		w.Run(ctx)
-	}()
-
-	b.workers[cfg.BotID] = &entry{worker: w, cancel: cancel, doneCh: doneCh}
 	return nil
 }
 
-// PauseBot sends a Pause signal to the named worker.
+// PauseBot transitions the named worker to StatePause.
 func (o *Orchestrator) PauseBot(botID string) error {
-	return o.send(botID, worker.SignalPause)
+	e, err := o.get(botID)
+	if err != nil {
+		return err
+	}
+	return e.w.Transition(worker.StatePause)
 }
 
-// ResumeBot sends a Resume signal to the named worker.
+// ResumeBot transitions the named worker from StatePause to StateNormal.
 func (o *Orchestrator) ResumeBot(botID string) error {
-	return o.send(botID, worker.SignalResume)
+	e, err := o.get(botID)
+	if err != nil {
+		return err
+	}
+	return e.w.Transition(worker.StateNormal)
 }
 
-// StopBot signals the worker to stop, waits for the goroutine to exit, then
-// removes it from the registry.
+// StopBot removes the worker from the registry.
 func (o *Orchestrator) StopBot(botID string) error {
 	b := o.bucket(botID)
 	b.mu.Lock()
-	e, exists := b.workers[botID]
-	if !exists {
-		b.mu.Unlock()
+	defer b.mu.Unlock()
+	if _, exists := b.workers[botID]; !exists {
 		return fmt.Errorf("orchestrator: bot %s not found", botID)
 	}
-	// Remove from registry before releasing lock so new StartBot can reuse the ID.
 	delete(b.workers, botID)
-	b.mu.Unlock()
-
-	e.worker.Send(worker.SignalStop)
-	e.cancel()
-	<-e.doneCh
 	return nil
 }
 
-// UpdateConfig delivers a live config update to the named worker.
-func (o *Orchestrator) UpdateConfig(botID string, cfg models.BotConfig) error {
-	b := o.bucket(botID)
-	b.mu.RLock()
-	e, exists := b.workers[botID]
-	b.mu.RUnlock()
-	if !exists {
-		return fmt.Errorf("orchestrator: bot %s not found", botID)
-	}
-	e.worker.UpdateConfig(worker.Config{
-		BotID:        cfg.BotID,
-		TradingPair:  cfg.TradingPair,
-		OrderLayers:  cfg.OrderLayers,
-		LayerSize:    cfg.LayerSizeBase,
-		TickInterval: time.Second,
-		Bounds:       worker.SpreadBoundsFromModel(cfg.Spread),
-	})
-	return nil
-}
-
-// BotState returns the current state of a bot worker.
+// BotState returns the current WorkerState of a bot as a models.BotState string.
 func (o *Orchestrator) BotState(botID string) (models.BotState, error) {
-	b := o.bucket(botID)
-	b.mu.RLock()
-	e, exists := b.workers[botID]
-	b.mu.RUnlock()
-	if !exists {
-		return "", fmt.Errorf("orchestrator: bot %s not found", botID)
+	e, err := o.get(botID)
+	if err != nil {
+		return "", err
 	}
-	return e.worker.State(), nil
+	switch e.w.State() {
+	case worker.StateSlow:
+		return models.BotStateSlow, nil
+	case worker.StatePause:
+		return models.BotStatePaused, nil
+	default:
+		return models.BotStateRunning, nil
+	}
 }
 
-// ActiveBotIDs returns a snapshot of all currently running bot IDs.
+// Adapter returns the ExchangeAdapter registered for the given botID.
+// Used by the trading engine to fetch books and place orders.
+func (o *Orchestrator) Adapter(botID string) (exchange.ExchangeAdapter, error) {
+	e, err := o.get(botID)
+	if err != nil {
+		return nil, err
+	}
+	return e.adapter, nil
+}
+
+// ActiveBotIDs returns a snapshot of all currently registered bot IDs.
 func (o *Orchestrator) ActiveBotIDs() []string {
 	var ids []string
 	for i := range o.shards {
@@ -184,29 +146,24 @@ func (o *Orchestrator) ActiveBotIDs() []string {
 	return ids
 }
 
-// StopAll stops every running worker. Used on graceful shutdown.
+// StopAll removes all workers from the registry. Called on graceful shutdown.
 func (o *Orchestrator) StopAll() {
-	ids := o.ActiveBotIDs()
-	var wg sync.WaitGroup
-	for _, id := range ids {
-		id := id
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = o.StopBot(id)
-		}()
+	for i := range o.shards {
+		o.shards[i].mu.Lock()
+		for id := range o.shards[i].workers {
+			delete(o.shards[i].workers, id)
+		}
+		o.shards[i].mu.Unlock()
 	}
-	wg.Wait()
 }
 
-func (o *Orchestrator) send(botID string, sig worker.Signal) error {
+func (o *Orchestrator) get(botID string) (*entry, error) {
 	b := o.bucket(botID)
 	b.mu.RLock()
 	e, exists := b.workers[botID]
 	b.mu.RUnlock()
 	if !exists {
-		return fmt.Errorf("orchestrator: bot %s not found", botID)
+		return nil, fmt.Errorf("orchestrator: bot %s not found", botID)
 	}
-	e.worker.Send(sig)
-	return nil
+	return e, nil
 }

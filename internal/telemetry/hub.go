@@ -1,23 +1,34 @@
 // Package telemetry manages gRPC server-streaming subscriptions for telemetry events.
-// The Hub fans out worker.Telemetry events to all active StreamTelemetry callers.
+// The Hub fans out Event values to all active StreamTelemetry callers.
 package telemetry
 
 import (
 	"sync"
+	"time"
 
-	"liquidity-guard-bot/internal/worker"
+	"liquidity-guard-bot/pkg/exchange"
 )
 
-// Subscriber is a channel that receives Telemetry events for one gRPC stream.
-type Subscriber chan worker.Telemetry
+// Event is a snapshot emitted to gRPC telemetry subscribers.
+type Event struct {
+	BotID     string
+	State     string // "RUNNING", "SLOW", "PAUSED"
+	OrderBook *exchange.OrderBook
+	Balances  []exchange.Balance
+	Timestamp time.Time
+}
+
+// Subscriber is a channel that receives Event values for one gRPC stream.
+type Subscriber chan Event
 
 // Hub is a thread-safe fan-out broker.
-// Workers push to the hub's inbound channel; gRPC handlers subscribe and receive.
+// Producers push to the write-only channel returned by NewHub;
+// gRPC handlers subscribe and receive via Subscribe.
 type Hub struct {
 	mu          sync.RWMutex
 	subscribers map[uint64]subscription
 	nextID      uint64
-	inbound     chan worker.Telemetry
+	inbound     chan Event
 }
 
 type subscription struct {
@@ -26,9 +37,9 @@ type subscription struct {
 }
 
 // NewHub creates a Hub and starts its dispatch goroutine.
-// The returned channel is the inbound feed — workers write here.
-func NewHub() (*Hub, chan<- worker.Telemetry) {
-	ch := make(chan worker.Telemetry, 256)
+// The returned channel is the inbound feed — producers write here.
+func NewHub() (*Hub, chan<- Event) {
+	ch := make(chan Event, 256)
 	h := &Hub{
 		subscribers: make(map[uint64]subscription),
 		inbound:     ch,
@@ -82,7 +93,6 @@ func (h *Hub) run() {
 					continue
 				}
 			}
-			// Non-blocking send — slow consumers miss events rather than stall the hub.
 			select {
 			case s.ch <- event:
 			default:
