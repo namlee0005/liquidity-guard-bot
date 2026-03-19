@@ -20,49 +20,9 @@ The Liquidity Guard Bot is a specialized automated market maker designed to main
 
 > **Hard rule:** `Float` is strictly prohibited for all monetary and quantity fields. Use Python `Decimal` and PostgreSQL `NUMERIC(28,10)` throughout.
 
-## Architecture Overview (ORIGINAL — DEPRECATED)
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                      Liquidity Guard Bot                      │
-│                                                              │
-│  ┌─────────────────┐    ┌──────────────────┐  ┌──────────┐  │
-│  │   Price Oracle   │───▶│   Order Engine   │─▶│  CCXT    │  │
-│  │ (WS + REST fall) │    │  (Spread Calc +  │  │ Exchange │  │
-│  └────────┬────────┘    │   Order Manager) │  └──────────┘  │
-│           │             └────────┬─────────┘                │
-│           ▼                      │                           │
-│  ┌─────────────────┐    ┌────────▼─────────┐  ┌──────────┐  │
-│  │  Depth Monitor  │    │ Inventory Manager│─▶│ PostgreSQL│  │
-│  │ (compliance chk)│    │ (skew, NAV, snap)│  │(trade log)│  │
-│  └─────────────────┘    └────────┬─────────┘  └──────────┘  │
-│                                  │                           │
-│  ┌─────────────────┐    ┌────────▼─────────┐  ┌──────────┐  │
-│  │  Risk Controller │◀───│   Risk Engine    │  │  Redis   │  │
-│  │  (state machine) │    │ (drawdown check) │─▶│(state +  │  │
-│  │ NORMAL/SLOW/PAUSE│    └──────────────────┘  │ cache)   │  │
-│  └────────┬────────┘                           └──────────┘  │
-│           │                                                   │
-│  ┌────────▼────────┐    ┌──────────────────┐                 │
-│  │    Reporter     │    │Prometheus Exporter│                 │
-│  │(daily/wk/monthly│    │  + Grafana dash  │                 │
-│  └─────────────────┘    └──────────────────┘                 │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Key Components (ORIGINAL — DEPRECATED)
-
-- **Price Oracle:** Async WebSocket consumer (CCXT Pro). Raises `StalePriceError` if no update in >5s; falls back to REST. Feeds mid-price and order book snapshot into Redis.
-- **Order Engine:** `SpreadCalculator` generates a layered bid/ask grid (20–50 orders per side) within configured spread (0.3%–1%). Skews quotes toward rebalancing when inventory is unbalanced (LONG → lower ask; SHORT → lower bid). `OrderManager` diffs against live orders, cancels stale (price drift >0.1%), and places new orders each cycle (default 10s).
-- **Depth Monitor:** Verifies compliance — either total order value within ±2% price band ≥ `min_depth_usd`, OR order count per side ≥ `min_order_count`. Exposes compliance as a Prometheus gauge.
-- **Inventory Manager:** Tracks fills and balances; computes NAV and skew %; snapshots to PostgreSQL every 5 min. Feeds skew data to Risk Engine and SpreadCalculator.
-- **Risk Engine + Controller:** Monitors 24h NAV drawdown. State machine: `NORMAL → SLOW (≥5% drawdown) → PAUSE (≥10% drawdown) → RESUME (after 30-min recovery)`. PAUSE triggers `emergency_cancel_all()`. State persisted in Redis for crash recovery.
-- **Reporter:** APScheduler jobs query PostgreSQL for P&L, uptime %, depth compliance %, and risk events. Outputs sanitized JSON reports to `reports/`; optional email delivery.
-- **Prometheus Exporter:** `/metrics` on port 9090 (configurable); `/health` endpoint. Grafana dashboard covers spread, drawdown, skew, order counts, and uptime.
-
 ---
 
-## REVISION 1 — 2026-03-19 (Architecture & Stack Pivot)
+## REVISION 1 — 2026-03-19 (Architecture & Stack Pivot — DEPRECATED)
 
 ### New Technical Constraints
 - **Language:** **Go (Golang)** — Mandatory for high-concurrency exchange handling via Goroutines.
@@ -71,9 +31,79 @@ The Liquidity Guard Bot is a specialized automated market maker designed to main
 - **Control Plane:** Must support an external 3rd-party management interface (Create/Pause/Delete bots, Live Config Update).
 - **Telemetry:** Real-time WebSocket streaming of per-pair order books and account balances to the control plane.
 
-### Updated Component Requirements
-- **Exchange Workers:** Lightweight Go processes/goroutines per pair/exchange. Must implement a unified interface for different exchange WebSocket/REST patterns.
-- **Management API:** REST or gRPC interface for bot orchestration.
-- **State Store:** MongoDB collections for `BotConfigs`, `ActiveSessions`, `AuditLogs`, and `TradeHistory`.
-- **Concurrency Model:** Utilize Go's `channels` and `select` for non-blocking market data processing.
-- **Risk Watchdog:** Still required as an independent enforcement mechanism (can be a separate Go service).
+---
+
+## REVISION 2 — 2026-03-19 (Hybrid DB — DEPRECATED)
+
+### Summary of Changes from Revision 1
+1. **DB split:** MongoDB for configs/sessions; PostgreSQL for TradeHistory/AuditLogs.
+2. **API:** Management API is gRPC + Protobuf.
+3. **Risk Watchdog:** Separate Docker container.
+4. **Redis:** Eliminated.
+
+---
+
+## REVISION 3 — 2026-03-19 (Single DB Consolidation)
+
+### Rationale for Consolidation
+To reduce operational complexity and infrastructure footprint, the system is consolidated to a **single database: MongoDB**. All financial records, audit logs, and configurations will reside in MongoDB. Financial consistency is ensured via MongoDB Multi-Document Transactions where necessary.
+
+### Final Tech Stack
+
+| Layer | Technology | Rationale |
+|---|---|---|
+| **Runtime** | Go 1.22+ | Native goroutine parallelism; type-safe concurrency models |
+| **Primary Database** | **MongoDB 7.0+** | Consolidated store for all data types; flexible schema for multi-exchange configs |
+| **Exchange Integration** | Native Go adapters | Unified 4-method interface for MEXC, Bybit, Gate.io, Kraken |
+| **Control Plane** | gRPC (Protobuf) | Strongly typed contracts; bidirectional telemetry streaming |
+| **Risk Watchdog** | Separate Go service | Independent process monitoring NAV/Drawdown; communicates via MongoDB |
+| **Telemetry** | gRPC Server-Streaming | Order books and balances pushed over the management channel |
+| **Monetary Types** | `shopspring/decimal` + **BSON Decimal128** | `float64` strictly prohibited; atomic precision maintained |
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Liquidity Guard Bot (Go binary)                   │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │            gRPC Control Plane API (Protobuf)                 │   │
+│  │  CreateBot / PauseBot / DeleteBot / UpdateConfig             │   │
+│  │  StreamTelemetry (server-stream: order book + balances)      │   │
+│  └───────────────────────┬─────────────────────────────────────┘   │
+│                          │ signals via MongoDB/Channels             │
+│  ┌───────────────────────▼─────────────────────────────────────┐   │
+│  │      Bot Registry (sharded map[botID]*BotWorker)            │   │
+│  │                                                             │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐   │   │
+│  │  │  MEXC Worker │  │ Bybit Worker │  │ Gate / Kraken  │   │   │
+│  │  │ (goroutine)  │  │ (goroutine)  │  │   Workers      │   │   │
+│  │  └──────┬───────┘  └──────┬───────┘  └───────┬────────┘   │   │
+│  └─────────┼─────────────────┼──────────────────┼────────────┘   │
+│            │ market data, balance, order events                  │
+│  ┌─────────▼─────────────────▼──────────────────▼────────────┐   │
+│  │  Per-Worker Core                                            │   │
+│  │  SpreadCalc │ OrderManager │ DepthMonitor │ InventoryTracker│   │
+│  └────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────┬───────────────────────┘
+                                              │ CRUD
+                                              ▼
+┌─────────────────────┐        ┌──────────────────────────────────┐
+│   Risk Watchdog     │        │           MongoDB                │
+│  (separate container│◀──────▶│  - BotConfigs                    │
+│   no main dep.)     │        │  - ActiveSessions                │
+│  FSM: NOR/SLOW/PAUSE│        │  - TradeHistory (ACID)           │
+│                     │        │  - AuditLogs (ACID)              │
+└─────────────────────┘        └──────────────────────────────────┘
+```
+
+### Key Component Adjustments
+
+- **State Store (MongoDB Only):** 
+    - `BotConfigs`: Bot parameters and exchange credentials.
+    - `ActiveSessions`: Real-time bot status, risk state, and heartbeats.
+    - `TradeHistory`: Every fill, order placement, and cancellation. Use TTL indexes for automatic data rotation if needed.
+    - `AuditLogs`: Record of all external management actions.
+- **Data Integrity:** All writes to `TradeHistory` and `AuditLogs` use `WriteConcern: Majority`. Complex rebalancing or multi-step inventory updates use MongoDB sessions/transactions to prevent split-brain state.
+- **Risk Watchdog:** Runs as an independent Docker service. Polls NAV snapshots from `TradeHistory` and balances from `ActiveSessions`. Writes risk state directly to the bot's session document in MongoDB.
+- **Bot Orchestrator:** Polls its assigned session document in MongoDB for state changes (`PAUSE`, `CONFIG_UPDATE`) every 5s as a fallback to internal gRPC signals.
