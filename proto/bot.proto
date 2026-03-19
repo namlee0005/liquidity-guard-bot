@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package bot;
+
+option go_package = "github.com/namlee0005/liquidity-guard-bot/proto/gen;botpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Exchange {
+  EXCHANGE_UNSPECIFIED = 0;
+  EXCHANGE_MEXC        = 1;
+  EXCHANGE_BYBIT       = 2;
+  EXCHANGE_GATE        = 3;
+  EXCHANGE_KRAKEN      = 4;
+}
+
+enum BotState {
+  BOT_STATE_UNSPECIFIED = 0;
+  BOT_STATE_RUNNING     = 1;
+  BOT_STATE_SLOW        = 2;  // throttled — risk watchdog signal
+  BOT_STATE_PAUSED      = 3;
+  BOT_STATE_STOPPED     = 4;
+}
+
+// ─── Shared value types ───────────────────────────────────────────────────────
+
+// Monetary amounts are always transmitted as string to preserve Decimal128 precision.
+// Receivers MUST parse via shopspring/decimal — never float64.
+message DecimalValue {
+  string value = 1; // e.g. "12345.6789012345"
+}
+
+message SpreadConfig {
+  DecimalValue min_spread_pct = 1; // e.g. "0.003"  (0.3%)
+  DecimalValue max_spread_pct = 2; // e.g. "0.01"   (1.0%)
+}
+
+message RiskConfig {
+  DecimalValue max_drawdown_pct_24h = 1; // e.g. "0.05" (5%)
+  DecimalValue max_nav_pct          = 2; // e.g. "0.10" (10%)
+}
+
+// ─── Bot lifecycle messages ───────────────────────────────────────────────────
+
+message CreateBotRequest {
+  string       bot_id          = 1; // client-assigned idempotency key
+  Exchange     exchange        = 2;
+  string       trading_pair    = 3; // e.g. "BTC/USDT"
+  string       api_key         = 4;
+  string       api_secret      = 5; // encrypted at rest; plaintext in transit only over mTLS
+  SpreadConfig spread          = 6;
+  RiskConfig   risk            = 7;
+  int32        order_layers    = 8; // number of bid/ask layers to maintain
+  DecimalValue layer_size_base = 9; // size per layer in base currency
+}
+
+message CreateBotResponse {
+  string    bot_id     = 1;
+  BotState  state      = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message PauseBotRequest  { string bot_id = 1; }
+message PauseBotResponse { string bot_id = 1; BotState state = 2; }
+
+message ResumeBotRequest  { string bot_id = 1; }
+message ResumeBotResponse { string bot_id = 1; BotState state = 2; }
+
+message DeleteBotRequest  { string bot_id = 1; bool cancel_open_orders = 2; }
+message DeleteBotResponse { string bot_id = 1; bool orders_cancelled    = 2; }
+
+message UpdateConfigRequest {
+  string       bot_id = 1;
+  SpreadConfig spread = 2;
+  RiskConfig   risk   = 3;
+  // Omit a field to leave it unchanged (wrapper semantics via oneof not needed
+  // at this stage — full replacement is simpler and auditable).
+}
+message UpdateConfigResponse {
+  string   bot_id     = 1;
+  BotState state      = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// ─── Telemetry streaming ──────────────────────────────────────────────────────
+
+message StreamTelemetryRequest {
+  repeated string bot_ids = 1; // empty = subscribe to all bots for this API key
+}
+
+message OrderBookLevel {
+  DecimalValue price    = 1;
+  DecimalValue quantity = 2;
+}
+
+message OrderBookSnapshot {
+  string       trading_pair = 1;
+  Exchange     exchange     = 2;
+  repeated OrderBookLevel bids = 3; // descending price
+  repeated OrderBookLevel asks = 4; // ascending price
+  google.protobuf.Timestamp captured_at = 5;
+}
+
+message BalanceSnapshot {
+  Exchange     exchange     = 1;
+  string       asset        = 2;
+  DecimalValue free         = 3;
+  DecimalValue locked       = 4;
+  google.protobuf.Timestamp captured_at = 5;
+}
+
+message TelemetryEvent {
+  string   bot_id = 1;
+  BotState state  = 2;
+  oneof payload {
+    OrderBookSnapshot order_book = 3;
+    BalanceSnapshot   balance    = 4;
+  }
+}
+
+// ─── gRPC Service ─────────────────────────────────────────────────────────────
+
+service BotManagement {
+  rpc CreateBot      (CreateBotRequest)      returns (CreateBotResponse);
+  rpc PauseBot       (PauseBotRequest)       returns (PauseBotResponse);
+  rpc ResumeBot      (ResumeBotRequest)      returns (ResumeBotResponse);
+  rpc DeleteBot      (DeleteBotRequest)      returns (DeleteBotResponse);
+  rpc UpdateConfig   (UpdateConfigRequest)   returns (UpdateConfigResponse);
+
+  // Server-streaming: pushes order book + balance snapshots to the control plane.
+  rpc StreamTelemetry(StreamTelemetryRequest) returns (stream TelemetryEvent);
+}
